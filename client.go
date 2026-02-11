@@ -50,10 +50,11 @@ func handleClient(localConn net.Conn) {
 	dialer.HandshakeTimeout = 10 * time.Second
 	wsConn, _, err := dialer.Dial(config.RemoteAddr, nil)
 	if err != nil {
-		log.Printf("[Client] Dial Failed: %v", err)
+		log.Printf("[Client] Dial Failed to %v: %v", config.RemoteAddr, err)
 		return
 	}
 	defer wsConn.Close()
+	log.Printf("[Client] Dial Success: %v", config.RemoteAddr)
 
 	// 【关键】启动心跳协程
 	// 每 15 秒发送一个 Ping，告诉服务器别断开我
@@ -122,8 +123,12 @@ func handleClient(localConn net.Conn) {
 		}
 	}()
 
-	<-errChan
-	log.Printf("[Client] Connection Closed (Will Retry via Tailscale)")
+	err = <-errChan
+	log.Printf("[Client] Connection Closed: %v", err)
+
+	// Close connections to unblock the other goroutine
+	localConn.Close()
+	wsConn.Close()
 }
 
 func main() {
