@@ -1,0 +1,4 @@
+{
+    "localAddr": ":8100",
+    "remoteAddr": "ws://server/tunnel"
+}
