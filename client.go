@@ -13,6 +13,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type Config struct {
 	LocalAddr  string `json:"localAddr"`
 	RemoteAddr string `json:"remoteAddr"`
@@ -86,14 +93,20 @@ func handleClient(localConn net.Conn) {
 		for {
 			n, err := localConn.Read(buf)
 			if err != nil {
+				log.Printf("[Client] Upstream Read Error: %v", err)
 				errChan <- err
 				return
 			}
+			log.Printf("[Client] Upstream: Read %d bytes from local connection", n)
+			log.Printf("[Client] Upstream: Data preview (first 200 bytes): %s", string(buf[:min(n, 200)]))
 			encoded := base64.StdEncoding.EncodeToString(buf[:n])
+			log.Printf("[Client] Upstream: Encoded to %d bytes, sending to WebSocket", len(encoded))
 			if err := wsConn.WriteMessage(websocket.TextMessage, []byte(encoded)); err != nil {
+				log.Printf("[Client] Upstream: WebSocket Write Error: %v", err)
 				errChan <- err
 				return
 			}
+			log.Printf("[Client] Upstream: Successfully sent to WebSocket")
 		}
 	}()
 
@@ -102,24 +115,32 @@ func handleClient(localConn net.Conn) {
 		for {
 			_, msg, err := wsConn.ReadMessage()
 			if err != nil {
+				log.Printf("[Client] Downstream: WebSocket Read Error: %v", err)
 				errChan <- err
 				return
 			}
 
 			cleanMsg := strings.TrimSpace(string(msg))
 			if len(cleanMsg) == 0 {
+				log.Printf("[Client] Downstream: Received empty message, skipping")
 				continue
 			}
 
+			log.Printf("[Client] Downstream: Received %d bytes from WebSocket", len(cleanMsg))
 			rawBytes, err := base64.StdEncoding.DecodeString(cleanMsg)
 			if err != nil {
+				log.Printf("[Client] Downstream: Base64 Decode Error: %v", err)
 				continue
 			}
+			log.Printf("[Client] Downstream: Decoded to %d bytes", len(rawBytes))
+			log.Printf("[Client] Downstream: Data preview (first 200 bytes): %s", string(rawBytes[:min(len(rawBytes), 200)]))
 
 			if _, err := localConn.Write(rawBytes); err != nil {
+				log.Printf("[Client] Downstream: Local Write Error: %v", err)
 				errChan <- err
 				return
 			}
+			log.Printf("[Client] Downstream: Successfully wrote %d bytes to local connection", len(rawBytes))
 		}
 	}()
 
