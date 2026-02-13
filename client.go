@@ -13,13 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 type Config struct {
 	LocalAddr  string `json:"localAddr"`
 	RemoteAddr string `json:"remoteAddr"`
@@ -50,52 +43,35 @@ func loadConfig() error {
 
 func handleClient(localConn net.Conn) {
 	defer localConn.Close()
-	log.Printf("[Client] New Connection...")
 
 	// 1. 连接远程 WebSocket
 	dialer := websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
 	wsConn, _, err := dialer.Dial(config.RemoteAddr, nil)
 	if err != nil {
-		log.Printf("[Client] Dial Failed to %v: %v", config.RemoteAddr, err)
+		log.Printf("[Client] Dial Failed: %v", err)
 		return
 	}
 	defer wsConn.Close()
-	log.Printf("[Client] Dial Success: %v", config.RemoteAddr)
 
-	// 【关键】启动心跳协程
-	// 每 15 秒发送一个 Ping，告诉服务器别断开我
+	// 启动心跳协程
 	stopHeartbeat := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
-		pingCount := 0
 		for {
 			select {
 			case <-ticker.C:
-				pingCount++
-				log.Printf("[Client] Heartbeat: Sending Ping #%d", pingCount)
-				// 发送 Ping 控制帧 (不需要 Base64，这是协议层的)
 				if err := wsConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second)); err != nil {
-					log.Printf("[Client] Heartbeat: Ping Failed: %v", err)
-					return // 发送失败意味着连接断了
+					return
 				}
-				log.Printf("[Client] Heartbeat: Ping #%d sent successfully", pingCount)
 			case <-stopHeartbeat:
-				log.Printf("[Client] Heartbeat: Stopping after %d pings", pingCount)
 				return
 			}
 		}
 	}()
-	defer close(stopHeartbeat) // 连接关闭时停止心跳
+	defer close(stopHeartbeat)
 
-	// 设置 Pong 处理函数来接收服务端的响应
-	wsConn.SetPongHandler(func(appData string) error {
-		log.Printf("[Client] Heartbeat: Received Pong from server")
-		return nil
-	})
-
-	log.Printf("[Client] Tunnel Established.")
 	errChan := make(chan error, 2)
 
 	// --- 上行：本地 -> 远程 ---
@@ -104,20 +80,14 @@ func handleClient(localConn net.Conn) {
 		for {
 			n, err := localConn.Read(buf)
 			if err != nil {
-				log.Printf("[Client] Upstream Read Error: %v", err)
 				errChan <- err
 				return
 			}
-			log.Printf("[Client] Upstream: Read %d bytes from local connection", n)
-			log.Printf("[Client] Upstream: Data preview (first 200 bytes): %s", string(buf[:min(n, 200)]))
 			encoded := base64.StdEncoding.EncodeToString(buf[:n])
-			log.Printf("[Client] Upstream: Encoded to %d bytes, sending to WebSocket", len(encoded))
 			if err := wsConn.WriteMessage(websocket.TextMessage, []byte(encoded)); err != nil {
-				log.Printf("[Client] Upstream: WebSocket Write Error: %v", err)
 				errChan <- err
 				return
 			}
-			log.Printf("[Client] Upstream: Successfully sent to WebSocket")
 		}
 	}()
 
@@ -126,42 +96,35 @@ func handleClient(localConn net.Conn) {
 		for {
 			_, msg, err := wsConn.ReadMessage()
 			if err != nil {
-				log.Printf("[Client] Downstream: WebSocket Read Error: %v", err)
 				errChan <- err
 				return
 			}
 
 			cleanMsg := strings.TrimSpace(string(msg))
 			if len(cleanMsg) == 0 {
-				log.Printf("[Client] Downstream: Received empty message, skipping")
 				continue
 			}
 
-			log.Printf("[Client] Downstream: Received %d bytes from WebSocket", len(cleanMsg))
 			rawBytes, err := base64.StdEncoding.DecodeString(cleanMsg)
 			if err != nil {
-				log.Printf("[Client] Downstream: Base64 Decode Error: %v", err)
 				continue
 			}
-			log.Printf("[Client] Downstream: Decoded to %d bytes", len(rawBytes))
-			log.Printf("[Client] Downstream: Data preview (first 200 bytes): %s", string(rawBytes[:min(len(rawBytes), 200)]))
 
 			if _, err := localConn.Write(rawBytes); err != nil {
-				log.Printf("[Client] Downstream: Local Write Error: %v", err)
 				errChan <- err
 				return
 			}
-			log.Printf("[Client] Downstream: Successfully wrote %d bytes to local connection", len(rawBytes))
 		}
 	}()
 
 	err = <-errChan
-	log.Printf("[Client] Connection Closed: %v", err)
+	if err != nil {
+		log.Printf("[Client] Connection Closed: %v", err)
+	}
 
 	// Close connections to unblock the other goroutine
 	localConn.Close()
 	wsConn.Close()
-	log.Printf("[Client] Tunnel Disconnected")
 }
 
 func main() {
@@ -173,7 +136,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("== Heartbeat Client Started on %s ==", config.LocalAddr)
+	log.Printf("== Client Started on %s ==", config.LocalAddr)
 
 	go func() {
 		c := make(chan os.Signal, 1)
