@@ -69,20 +69,31 @@ func handleClient(localConn net.Conn) {
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
+		pingCount := 0
 		for {
 			select {
 			case <-ticker.C:
+				pingCount++
+				log.Printf("[Client] Heartbeat: Sending Ping #%d", pingCount)
 				// 发送 Ping 控制帧 (不需要 Base64，这是协议层的)
 				if err := wsConn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second)); err != nil {
-					log.Printf("[Client] Ping Failed: %v", err)
+					log.Printf("[Client] Heartbeat: Ping Failed: %v", err)
 					return // 发送失败意味着连接断了
 				}
+				log.Printf("[Client] Heartbeat: Ping #%d sent successfully", pingCount)
 			case <-stopHeartbeat:
+				log.Printf("[Client] Heartbeat: Stopping after %d pings", pingCount)
 				return
 			}
 		}
 	}()
 	defer close(stopHeartbeat) // 连接关闭时停止心跳
+
+	// 设置 Pong 处理函数来接收服务端的响应
+	wsConn.SetPongHandler(func(appData string) error {
+		log.Printf("[Client] Heartbeat: Received Pong from server")
+		return nil
+	})
 
 	log.Printf("[Client] Tunnel Established.")
 	errChan := make(chan error, 2)
@@ -150,6 +161,7 @@ func handleClient(localConn net.Conn) {
 	// Close connections to unblock the other goroutine
 	localConn.Close()
 	wsConn.Close()
+	log.Printf("[Client] Tunnel Disconnected")
 }
 
 func main() {
